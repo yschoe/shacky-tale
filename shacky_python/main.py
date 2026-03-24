@@ -14,8 +14,8 @@ from typing import Dict, List, Tuple
 import pygame
 
 # Grid and rendering constants (match original layout proportions)
-MAP_W = 72
-MAP_H = 36
+DEFAULT_MAP_W = 110
+DEFAULT_MAP_H = 50
 VIEW_W = 11
 VIEW_H = 5
 TILE = 50
@@ -198,9 +198,11 @@ class Game:
 
         self.sprites = self._load_sprites()
         self.map_data = self._load_or_generate_map()
+        self.map_h = len(self.map_data)
+        self.map_w = len(self.map_data[0]) if self.map_h else DEFAULT_MAP_W
 
-        self.player_x = 8
-        self.player_y = 30
+        self.player_x = min(15, self.map_w - 1)
+        self.player_y = min(40, self.map_h - 1)
         self.player_facing = "r"
 
         self.hp = 200
@@ -224,6 +226,7 @@ class Game:
         self.last_world_tick_ms = 0
         self.last_spawn_ms = 0
         self.message_lines: List[str] = []
+        self._place_player_on_walkable_tile()
 
     def _fon_path(self, name: str) -> Path:
         path = self.asset_dir / name
@@ -263,40 +266,42 @@ class Game:
         for map_path in candidate_paths:
             if map_path.exists():
                 lines = map_path.read_text(encoding="ascii", errors="ignore").splitlines()
-                lines = [line[:MAP_W].ljust(MAP_W, "0") for line in lines[:MAP_H]]
-                while len(lines) < MAP_H:
-                    lines.append("0" * MAP_W)
+                lines = [line.rstrip("\n\r") for line in lines if line.strip() != ""]
+                if not lines:
+                    continue
+                width = max(len(line) for line in lines)
+                lines = [line.ljust(width, "0") for line in lines]
                 return [[c for c in row] for row in lines]
 
         # Fallback handcrafted map when no map file is present.
-        grid = [["1" for _ in range(MAP_W)] for _ in range(MAP_H)]
-        for y in range(MAP_H):
-            for x in range(MAP_W):
-                if x in (0, MAP_W - 1) or y in (0, MAP_H - 1):
+        grid = [["1" for _ in range(DEFAULT_MAP_W)] for _ in range(DEFAULT_MAP_H)]
+        for y in range(DEFAULT_MAP_H):
+            for x in range(DEFAULT_MAP_W):
+                if x in (0, DEFAULT_MAP_W - 1) or y in (0, DEFAULT_MAP_H - 1):
                     grid[y][x] = "2"
                 elif (x + 2 * y) % 17 == 0:
                     grid[y][x] = "2"
 
         # Carve trails.
-        for x in range(2, MAP_W - 2):
+        for x in range(2, DEFAULT_MAP_W - 2):
             grid[30][x] = "0"
-        for y in range(6, MAP_H - 2):
+        for y in range(6, DEFAULT_MAP_H - 2):
             grid[y][8] = "0"
-        for y in range(4, MAP_H - 3):
+        for y in range(4, DEFAULT_MAP_H - 3):
             grid[y][58] = "0"
         for x in range(8, 59):
             grid[10][x] = "0"
 
         # Large water with island.
         cx, cy, rx, ry = 53, 16, 14, 9
-        for y in range(2, MAP_H - 2):
-            for x in range(2, MAP_W - 2):
+        for y in range(2, DEFAULT_MAP_H - 2):
+            for x in range(2, DEFAULT_MAP_W - 2):
                 if ((x - cx) * (x - cx)) / (rx * rx) + ((y - cy) * (y - cy)) / (ry * ry) <= 1.0:
                     grid[y][x] = "3"
         icx, icy, irx, iry = 55, 16, 4, 3
         for y in range(icy - iry - 1, icy + iry + 2):
             for x in range(icx - irx - 1, icx + irx + 2):
-                if 0 <= x < MAP_W and 0 <= y < MAP_H:
+                if 0 <= x < DEFAULT_MAP_W and 0 <= y < DEFAULT_MAP_H:
                     if ((x - icx) * (x - icx)) / (irx * irx) + ((y - icy) * (y - icy)) / (iry * iry) <= 1.0:
                         grid[y][x] = "0"
 
@@ -311,15 +316,15 @@ class Game:
 
     def _find_special_positions(self) -> Dict[str, Tuple[int, int]]:
         found: Dict[str, Tuple[int, int]] = {}
-        for y in range(MAP_H):
-            for x in range(MAP_W):
+        for y in range(self.map_h):
+            for x in range(self.map_w):
                 ch = self.map_data[y][x]
                 if ch in {"c", "h", "A", "v", "C"} and ch not in found:
                     found[ch] = (x, y)
         return found
 
     def wrap(self, x: int, y: int) -> Tuple[int, int]:
-        return x % MAP_W, y % MAP_H
+        return x % self.map_w, y % self.map_h
 
     def tile(self, x: int, y: int) -> str:
         x, y = self.wrap(x, y)
@@ -328,6 +333,17 @@ class Game:
     def set_tile(self, x: int, y: int, val: str) -> None:
         x, y = self.wrap(x, y)
         self.map_data[y][x] = val
+
+    def _place_player_on_walkable_tile(self) -> None:
+        if self.can_step_on(self.tile(self.player_x, self.player_y)):
+            return
+        for radius in range(1, max(self.map_w, self.map_h)):
+            for dy in range(-radius, radius + 1):
+                for dx in range(-radius, radius + 1):
+                    tx, ty = self.wrap(self.player_x + dx, self.player_y + dy)
+                    if self.can_step_on(self.tile(tx, ty)):
+                        self.player_x, self.player_y = tx, ty
+                        return
 
     def level(self, who: str) -> int:
         return {"f": 1, "s": 2, "b": 3, "S": 4}.get(who, 1)
@@ -396,10 +412,28 @@ class Game:
         pygame.draw.rect(self.screen, BLACK, (591, 71, 118, 198))
         self.blit_text("MESSAGES", 604, 75)
         y = 100
-        for line in self.message_lines[:10]:
-            surf = self.small.render(line[:19], True, WHITE)
+        wrapped: List[str] = []
+        for line in self.message_lines:
+            wrapped.extend(self._wrap_text(line, 18))
+        for line in wrapped[:10]:
+            surf = self.small.render(line, True, WHITE)
             self.screen.blit(surf, (595, y))
             y += 16
+
+    def _wrap_text(self, text: str, width: int) -> List[str]:
+        words = text.split()
+        if not words:
+            return [""]
+        lines: List[str] = []
+        current = words[0]
+        for word in words[1:]:
+            if len(current) + 1 + len(word) <= width:
+                current += " " + word
+            else:
+                lines.append(current)
+                current = word
+        lines.append(current)
+        return lines
 
     def update_exp(self) -> None:
         self.exp = self.killed * EXP_RATE
@@ -444,10 +478,10 @@ class Game:
         self.last_spawn_ms = now
 
     def _monster_region_ok(self, who: str, x: int, y: int) -> bool:
-        right_water_band = x >= int(MAP_W * 0.58) and 6 <= y <= int(MAP_H * 0.72)
-        north_mountains = y <= int(MAP_H * 0.38)
-        west_forest = x <= int(MAP_W * 0.40)
-        deep_east = x >= int(MAP_W * 0.62) and y >= int(MAP_H * 0.45)
+        right_water_band = x >= int(self.map_w * 0.58) and 6 <= y <= int(self.map_h * 0.72)
+        north_mountains = y <= int(self.map_h * 0.38)
+        west_forest = x <= int(self.map_w * 0.40)
+        deep_east = x >= int(self.map_w * 0.62) and y >= int(self.map_h * 0.45)
 
         if who == "f":
             return west_forest or not north_mountains
@@ -620,8 +654,12 @@ class Game:
                 self.break_game = True
 
     def full_map_view(self) -> None:
-        scale = 5
-        mini = pygame.Surface((MAP_W * scale, MAP_H * scale))
+        view_w = 550
+        view_h = 250
+        scale = max(1, min(view_w // self.map_w, view_h // self.map_h))
+        mini_w = self.map_w * scale
+        mini_h = self.map_h * scale
+        mini = pygame.Surface((mini_w, mini_h))
         mini.fill(BLACK)
         color = {
             "0": WHITE,
@@ -639,8 +677,8 @@ class Game:
             "b": WHITE,
             "S": WHITE,
         }
-        for y in range(MAP_H):
-            for x in range(MAP_W):
+        for y in range(self.map_h):
+            for x in range(self.map_w):
                 ch = self.map_data[y][x]
                 if ch in color:
                     pygame.draw.rect(mini, color[ch], (x * scale, y * scale, scale, scale), 1 if ch != "0" else 0)
@@ -648,7 +686,9 @@ class Game:
         pygame.draw.rect(mini, WHITE, (self.player_x * scale, self.player_y * scale, scale, scale), 1)
 
         self.screen.fill(BLACK)
-        self.screen.blit(mini, (30, 20))
+        ox = 30 + (view_w - mini_w) // 2
+        oy = 20 + (view_h - mini_h) // 2
+        self.screen.blit(mini, (ox, oy))
         self.blit_text("MAP VIEW - press any key", 590, 90)
         pygame.display.flip()
 
