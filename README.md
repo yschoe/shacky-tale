@@ -13,3 +13,15 @@ Source code:
 Concept, coding, design: Yoonsuck Choe
 Music: Ahran Lee, Anya Kim 
 
+Some screenshots:
+![splash](img/img1.png)
+
+![instr](img/img2.png)
+
+![game play](img/img3.png)
+
+![game play](img/img4.png)
+
+![game play](img/img5.png)
+
+
