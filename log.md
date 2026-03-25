@@ -35,8 +35,15 @@ Workspace: `/home/yschoe/git/shacky-tales`
 19. Added message-box portraits for dialog events.
 20. Reduced message font and placed wrapped text below portrait.
 21. Produced a parity checklist versus `shacky_t/shacky.pas`.
-22. Created `fonted/` and ported **`foned90.pas`** to Python as `fonted/fonted.py`.
-23. Added `fonted/README.md` and validated with `python -m py_compile fonted/fonted.py`.
+22. Created `fonted/` and ported `foned90.pas` to Python as `fonted/fonted.py` with README.
+23. Created static web port in `shacky_web/`:
+   - `index.html`, `game.js`, auto-generated hard-coded `assets.js`, `README.md`
+   - Ported gameplay loop from Python version for browser canvas.
+24. Added held-key movement repeat to both ports:
+   - Web: key hold repeat with initial delay and interval
+   - Python: KEYUP-aware hold repeat with same timing.
+25. Added movement/attack SFX to both ports.
+26. Reduced movement SFX volume by half in both ports.
 
 ## Files Created/Updated During Session
 
@@ -45,10 +52,14 @@ Workspace: `/home/yschoe/git/shacky-tales`
 - `shacky_python/map2.map`
 - `fonted/fonted.py`
 - `fonted/README.md`
+- `shacky_web/index.html`
+- `shacky_web/assets.js`
+- `shacky_web/game.js`
+- `shacky_web/README.md`
 - `log.md`
 - `transcript.md`
 
 ## Latest Request
 
-- User asked: `update log.md and transcript.md`
-- Both files updated.
+- User asked: `Yes, please go ahead.` (update logs)
+- `log.md` and `transcript.md` updated.

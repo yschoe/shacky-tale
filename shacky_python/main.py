@@ -34,6 +34,8 @@ MAX_HP_LOSS_PER_WORLD_TICK = 1
 SPAWN_COOLDOWN_MS = 1200
 SPAWN_WAVE_CHANCE = 0.45
 SPAWN_PER_TYPE_CHANCE = 0.55
+HOLD_MOVE_INITIAL_DELAY_MS = 220
+HOLD_MOVE_REPEAT_MS = 120
 
 # HUD bars (0..480)
 HP_UPRATE = 50
@@ -42,6 +44,12 @@ MAX_BAR = 480
 
 WHITE = (240, 240, 240)
 BLACK = (0, 0, 0)
+RED = (255, 0, 0)
+GREEN = (0, 255, 0)
+CYAN = (0, 255, 255)
+GRAY = (100, 100, 100)
+MAGENTA = (255, 0, 255)
+
 
 
 @dataclass
@@ -216,7 +224,7 @@ class Game:
         self.player_y = min(40, self.map_h - 1)
         self.player_facing = "r"
 
-        self.hp = 200
+        self.hp = 400
         self.exp = 0
         self.killed = 0
 
@@ -236,9 +244,12 @@ class Game:
         self.last_action_ms = 0
         self.last_world_tick_ms = 0
         self.last_spawn_ms = 0
+        self.held_move_action: str | None = None
+        self.next_held_move_ms = 0
         self.message_lines: List[str] = []
         self.music_enabled = pygame.mixer.get_init() is not None
         self.music_channel = pygame.mixer.Channel(0) if self.music_enabled else None
+        self.sfx_channel = pygame.mixer.Channel(1) if self.music_enabled else None
         self.song_cache: Dict[str, List[SongEvent]] = {}
         self.tone_cache: Dict[Tuple[int, int], pygame.mixer.Sound] = {}
         self.current_song: List[SongEvent] | None = None
@@ -380,6 +391,14 @@ class Game:
         song = song_map.get(mes_num)
         if song:
             self.play_song(song, loop=False)
+
+    def play_sfx_tone(self, hz: int, ms: int, volume: float = 1.0) -> None:
+        if not self.music_enabled:
+            return
+        tone = self._build_tone(hz, ms)
+        if tone and self.sfx_channel:
+            self.sfx_channel.set_volume(max(0.0, min(1.0, volume)))
+            self.sfx_channel.play(tone)
 
     def _load_sprites(self) -> Dict[str, pygame.Surface]:
         sprites: Dict[str, pygame.Surface] = {}
@@ -768,11 +787,13 @@ class Game:
     def can_step_on(self, tile: str) -> bool:
         return tile in {"0", "C", "h", "c", "A", "v", "s"} or (tile == "3" and self.shoes_num == 1)
 
-    def try_move(self, dx: int, dy: int, facing: str) -> None:
+    def try_move(self, dx: int, dy: int, facing: str) -> bool:
         tx, ty = self.wrap(self.player_x + dx, self.player_y + dy)
         self.player_facing = facing
         if self.can_step_on(self.tile(tx, ty)):
             self.player_x, self.player_y = tx, ty
+            return True
+        return False
 
     def check_message(self) -> None:
         self.message_lines = []
@@ -828,15 +849,15 @@ class Game:
         mini.fill(BLACK)
         color = {
             "0": WHITE,
-            "1": WHITE,
-            "2": WHITE,
-            "3": WHITE,
-            "c": WHITE,
-            "C": WHITE,
-            "h": WHITE,
-            "v": WHITE,
-            "A": WHITE,
-            "w": WHITE,
+            "1": GREEN,
+            "2": BLACK,
+            "3": CYAN,
+            "c": MAGENTA,
+            "C": MAGENTA,
+            "h": MAGENTA,
+            "v": MAGENTA,
+            "A": MAGENTA,
+            "w": GRAY,
             "f": WHITE,
             "s": WHITE,
             "b": WHITE,
@@ -847,14 +868,15 @@ class Game:
                 ch = self.map_data[y][x]
                 if ch in color:
                     pygame.draw.rect(mini, color[ch], (x * scale, y * scale, scale, scale), 1 if ch != "0" else 0)
-        pygame.draw.rect(mini, BLACK, (self.player_x * scale, self.player_y * scale, scale, scale))
-        pygame.draw.rect(mini, WHITE, (self.player_x * scale, self.player_y * scale, scale, scale), 1)
+        pygame.draw.rect(mini, RED, (self.player_x * scale, self.player_y * scale, scale, scale))
+        pygame.draw.rect(mini, RED, (self.player_x * scale, self.player_y * scale, scale, scale), 1)
 
         self.screen.fill(BLACK)
         ox = 30 + (view_w - mini_w) // 2
         oy = 20 + (view_h - mini_h) // 2
         self.screen.blit(mini, (ox, oy))
-        self.blit_text("MAP VIEW - press any key", 590, 90)
+        self.blit_text("MAP", 550, 90)
+        self.blit_text("press any key", 550, 110)
         pygame.display.flip()
 
         waiting = True
@@ -871,6 +893,21 @@ class Game:
         if event.type == pygame.QUIT:
             pygame.quit()
             sys.exit(0)
+        if event.type == pygame.KEYUP:
+            mapping = {
+                pygame.K_UP: "move_u",
+                pygame.K_KP8: "move_u",
+                pygame.K_LEFT: "move_l",
+                pygame.K_KP4: "move_l",
+                pygame.K_DOWN: "move_d",
+                pygame.K_KP2: "move_d",
+                pygame.K_RIGHT: "move_r",
+                pygame.K_KP6: "move_r",
+            }
+            action = mapping.get(event.key)
+            if action and self.held_move_action == action:
+                self.held_move_action = None
+            return
         if event.type != pygame.KEYDOWN:
             return
 
@@ -913,6 +950,9 @@ class Game:
         action = mapping.get(key)
         if action:
             self.buffer.push(action, now)
+            if action.startswith("move_"):
+                self.held_move_action = action
+                self.next_held_move_ms = now + HOLD_MOVE_INITIAL_DELAY_MS
 
     def process_action(self, action: str) -> bool:
         now = pygame.time.get_ticks()
@@ -923,33 +963,41 @@ class Game:
             return False
 
         if action == "move_u":
-            self.try_move(0, -1, "u")
+            if self.try_move(0, -1, "u"):
+                self.play_sfx_tone(340, 50, volume=0.5)
             self.last_move_ms = now
         elif action == "move_l":
-            self.try_move(-1, 0, "l")
+            if self.try_move(-1, 0, "l"):
+                self.play_sfx_tone(340, 50, volume=0.5)
             self.last_move_ms = now
         elif action == "move_r":
-            self.try_move(1, 0, "r")
+            if self.try_move(1, 0, "r"):
+                self.play_sfx_tone(340, 50, volume=0.5)
             self.last_move_ms = now
         elif action == "move_d":
-            self.try_move(0, 1, "d")
+            if self.try_move(0, 1, "d"):
+                self.play_sfx_tone(340, 50, volume=0.5)
             self.last_move_ms = now
         elif action == "attack_mode":
             self.pending_attack = True
         elif action == "atk_n":
             self.player_facing = "u"
+            self.play_sfx_tone(600, 80)
             self.attack("n")
             self.last_action_ms = now
         elif action == "atk_w":
             self.player_facing = "l"
+            self.play_sfx_tone(600, 80)
             self.attack("w")
             self.last_action_ms = now
         elif action == "atk_s":
             self.player_facing = "d"
+            self.play_sfx_tone(600, 80)
             self.attack("s")
             self.last_action_ms = now
         elif action == "atk_e":
             self.player_facing = "r"
+            self.play_sfx_tone(600, 80)
             self.attack("e")
             self.last_action_ms = now
         elif action == "view_map":
@@ -1019,7 +1067,9 @@ class Game:
         self.screen.blit(self.sprites["anya"], (90, 285))
         self.screen.blit(self.sprites["tomb"], (145, 285))
         self.screen.blit(self.sprites["shoem"], (200, 285))
-        self.blit_text("Press any key to start game", 350, 302, color=BLACK)
+        self.blit_text("Press any key to start game", 350, 290, color=BLACK)
+        self.blit_text("Press [a] and direction to attack", 350, 305, color=BLACK)
+        self.blit_text("Press [m] for map", 350, 320, color=BLACK)
         pygame.display.flip()
         return self.wait_for_any_key()
 
@@ -1064,13 +1114,17 @@ class Game:
             had_action = False
             for event in pygame.event.get():
                 self.handle_event(event)
-            self.update_music(pygame.time.get_ticks())
+            now = pygame.time.get_ticks()
+            self.update_music(now)
+
+            if (not self.pending_attack) and self.held_move_action and now >= self.next_held_move_ms:
+                self.buffer.push(self.held_move_action, now)
+                self.next_held_move_ms = now + HOLD_MOVE_REPEAT_MS
 
             action = self.buffer.pop()
             if action:
                 had_action = self.process_action(action)
 
-            now = pygame.time.get_ticks()
             if (not had_action) and (now - self.last_world_tick_ms >= WORLD_TICK_MS):
                 self.update_world_when_idle()
                 self.last_world_tick_ms = now
