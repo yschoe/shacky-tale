@@ -9,6 +9,7 @@ Source code:
 * Ported by ChatGPT Codex to Python: [shacky_python/](shacky_python)
 * Ported by ChatGPT Codex to Javascript: [shacky_web/](shacky_python)
   * Runs in a browser. See the [shacky_web/README.md](shacky_web/README.md)
+  * You can try it here: [https://people.engr.tamu.edu/choe/choe/shacky_web/index.html](https://people.engr.tamu.edu/choe/choe/shacky_web/index.html)
 
 Log files:
 * Codex-genedated log: [log.md](log.md)
